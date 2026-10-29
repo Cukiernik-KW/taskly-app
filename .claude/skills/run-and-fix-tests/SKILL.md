@@ -12,9 +12,10 @@ python -m pytest backend/tests/<path>/test_x.py -q        # one backend file
 python -m pytest -q                                       # whole backend suite
 npm --prefix frontend test -- src/<path>/X.test.tsx       # one frontend file (path relative to frontend/)
 npm --prefix frontend test                                # whole frontend suite
+npm --prefix frontend run typecheck                       # Vitest does not type-check; run after frontend changes
 ```
 
-Run each touched file first, then the whole suite once at the end to catch fixture or mock leakage.
+Run each touched file first, then the whole suite once at the end to catch fixture or mock leakage. After frontend test changes, also run the typecheck: type errors in test files fail the build even when Vitest passes.
 
 ## Reading a failure
 

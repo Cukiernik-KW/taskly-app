@@ -89,7 +89,7 @@ jobs:
             --agent test-writer
             --model sonnet
             --max-turns 40
-            --allowedTools "Read,Edit,Write,Glob,Grep,Skill,Bash(git diff:*),Bash(git log:*),Bash(git status:*),Bash(python -m pytest:*),Bash(npm --prefix frontend test:*)"
+            --allowedTools "Read,Edit,Write,Glob,Grep,Skill,Bash(git diff:*),Bash(git log:*),Bash(git status:*),Bash(python -m pytest:*),Bash(npm --prefix frontend test:*),Bash(npm --prefix frontend run typecheck)"
             --disallowedTools "WebFetch,WebSearch,Bash(git commit:*),Bash(git push:*),Bash(gh:*),Edit(.github/**),Edit(.claude/**),Edit(backend/app/**)"
 
       - name: Enforce agent write scope

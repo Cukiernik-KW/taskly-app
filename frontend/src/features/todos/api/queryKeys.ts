@@ -4,5 +4,4 @@ export const todoKeys = {
   create: ['todos', 'create'] as const,
   update: ['todos', 'update'] as const,
   delete: ['todos', 'delete'] as const,
-  clearCompleted: ['todos', 'clearCompleted'] as const,
 }

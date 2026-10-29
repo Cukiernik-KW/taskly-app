@@ -212,6 +212,11 @@ jobs:
             echo "| Frontend (Vitest) | $(icon "$FE") | ${FE_PASSED} | ${FE_FAILED} | ${FE_SKIPPED} | ${FE_COV} |"
             echo
             echo "- Agent: \`${AGENT}\`, turns used: ${turns}/40"
+            if [ "$AGENT" != "success" ]; then
+              # Surface why the agent stopped (auth, turn limit, API error...).
+              reason=$(jq -r '[.[] | select(.type == "result")] | last | (.result // .subtype // "unknown") | tostring' "$EXECUTION_FILE" 2>/dev/null | head -c 500)
+              echo "- Agent stopped: \`${reason:-unknown}\`"
+            fi
             if [ -n "$COMMIT_SHA" ]; then
               echo "- Generated tests committed in ${COMMIT_SHA}"
             else

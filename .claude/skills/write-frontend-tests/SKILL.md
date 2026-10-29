@@ -35,6 +35,11 @@ Read `frontend/src/test/setup.ts`, `frontend/src/test/todoFixture.ts` and the cl
   Mock `todosApi` (or `request`), then assert on `client.getQueryData(key)` after `await waitFor(() => expect(result.current.isSuccess).toBe(true))`.
 - Timers: `vi.useFakeTimers()` and `vi.advanceTimersByTime()`, then restore with `vi.useRealTimers()`.
 
+## Known pitfalls
+
+- Long input (hundreds of characters): `await user.click(field); await user.paste(text)`. `user.type` sends one keystroke per character, times out, and the still-running test leaks into the next one.
+- `<input type="date">` sanitizes invalid values (e.g. `2026-02-30`) to `''`, so invalid-date branches can't be reached through the UI. Test them at the validator level instead.
+
 ## What to cover
 
 Rendering for each meaningful state (loading, empty, error, data), user interactions and the callbacks or API calls they trigger (with exact arguments), conditional branches, and error messages. Don't snapshot styled-components output, and don't test the design system.

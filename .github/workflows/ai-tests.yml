@@ -12,11 +12,6 @@ on:
 # Nothing by default; the job opts into the minimum it needs.
 permissions: {}
 
-concurrency:
-  # One run per PR; a newer push supersedes a run that is still going.
-  group: ai-tests-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 jobs:
   ai-tests:
     # - opt-in via the `ai-tests` label (a label added later also starts a run),
@@ -29,6 +24,11 @@ jobs:
       github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Job-level so that runs skipped by `if` (e.g. another label added) never
+    # cancel a real run. One run per PR; a newer push supersedes an older one.
+    concurrency:
+      group: ai-tests-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     permissions:
       contents: write       # push the generated test commit to the PR branch
       pull-requests: write  # create/update the sticky report comment
@@ -78,6 +78,8 @@ jobs:
           # Workflow token instead of the Claude GitHub App: short-lived, scoped
           # to this job's permissions, nothing posts as claude[bot].
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Full agent transcript only when the run is re-run with debug logging.
+          show_full_output: ${{ runner.debug == '1' }}
           # Only SHAs go into the prompt, never PR title/body (prompt injection).
           prompt: |
             PR mode. BASE_SHA=${{ github.event.pull_request.base.sha }} HEAD_SHA=${{ github.event.pull_request.head.sha }}

@@ -86,6 +86,15 @@ def test_delete_removes_task_and_returns_no_content(client, repository_mock):
     repository_mock.delete.assert_called_once_with(7)
 
 
+def test_delete_completed_returns_count_and_is_not_parsed_as_id(client, repository_mock):
+    repository_mock.delete_completed.return_value = 3
+    response = client.delete("/api/todos/completed")
+    assert response.status_code == 200
+    assert response.json() == {"deleted": 3}
+    repository_mock.delete_completed.assert_called_once_with()
+    repository_mock.delete.assert_not_called()
+
+
 def test_delete_returns_404_for_missing_task(client, repository_mock):
     repository_mock.delete.return_value = False
     response = client.delete("/api/todos/404")

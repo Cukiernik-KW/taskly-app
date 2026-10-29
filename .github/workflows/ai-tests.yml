@@ -1,0 +1,244 @@
+name: AI unit tests
+
+# Runs the test-writer agent on labelled pull requests, verifies its output
+# independently, commits the generated tests and reports in one PR comment.
+#
+# `pull_request` (not `pull_request_target`): the workflow file and the code
+# always come from the PR itself, and fork PRs never receive secrets.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+# Nothing by default; the job opts into the minimum it needs.
+permissions: {}
+
+concurrency:
+  # One run per PR; a newer push supersedes a run that is still going.
+  group: ai-tests-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  ai-tests:
+    # - opt-in via the `ai-tests` label (a label added later also starts a run),
+    # - same-repo PRs only: fork PRs get no secrets and must not get write access,
+    # - never react to our own bot (defence in depth; see the push step).
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'ai-tests') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'ai-tests') &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write       # push the generated test commit to the PR branch
+      pull-requests: write  # create/update the sticky report comment
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          # Don't leave the token in .git/config where the agent could reach it;
+          # the push step passes it explicitly.
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -r backend/requirements.txt
+          npm ci --prefix frontend --no-audit --no-fund
+
+      - name: Run test-writer agent
+        id: agent
+        # The agent's failure (e.g. turn limit) must not hide the verification
+        # and the report; its status is shown in the PR comment instead.
+        continue-on-error: true
+        uses: anthropics/claude-code-action@d70510b174a1244958df0b03166a54912811f3e6 # v1.0.264
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Workflow token instead of the Claude GitHub App: short-lived, scoped
+          # to this job's permissions, nothing posts as claude[bot].
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Only SHAs go into the prompt, never PR title/body (prompt injection).
+          prompt: |
+            PR mode. BASE_SHA=${{ github.event.pull_request.base.sha }} HEAD_SHA=${{ github.event.pull_request.head.sha }}
+            Analyse the changes between these commits, add or update unit tests where appropriate,
+            run them, and finish by writing agent-report.md.
+          # Read/write files + exactly the git and test commands it needs.
+          # No commit, push, gh, network or package installation.
+          claude_args: >-
+            --agent test-writer
+            --model sonnet
+            --max-turns 40
+            --allowedTools "Read,Edit,Write,Glob,Grep,Skill,Bash(git diff:*),Bash(git log:*),Bash(git status:*),Bash(python -m pytest:*),Bash(npm --prefix frontend test:*)"
+            --disallowedTools "WebFetch,WebSearch,Bash(git commit:*),Bash(git push:*),Bash(gh:*),Edit(.github/**),Edit(.claude/**),Edit(backend/app/**)"
+
+      - name: Enforce agent write scope
+        id: scope
+        # Prompts are not a security boundary: revert anything the agent
+        # touched outside test files before verifying or committing.
+        run: |
+          allowed='^(backend/tests/.*\.py|frontend/src/.*\.test\.tsx?)$'
+          reverted=""
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            if ! [[ "$file" =~ $allowed ]]; then
+              if git ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
+                git restore --source=HEAD --staged --worktree -- "$file"
+              else
+                rm -f -- "$file"
+              fi
+              reverted+="$file "
+            fi
+          done < <({ git diff --name-only HEAD; git ls-files --others --exclude-standard; } | sort -u)
+          echo "reverted=${reverted}" >> "$GITHUB_OUTPUT"
+          [ -n "$reverted" ] && echo "::warning::Reverted out-of-scope changes: ${reverted}"
+          true
+
+      - name: Verify backend tests
+        id: backend
+        continue-on-error: true
+        working-directory: backend
+        run: |
+          set +e
+          python -m pytest -q --cov=app --cov-report=json --junitxml=../backend-junit.xml
+          status=$?
+          python - >> "$GITHUB_OUTPUT" <<'EOF'
+          import json, xml.etree.ElementTree as ET
+          try:
+              s = ET.parse("../backend-junit.xml").getroot()
+              s = s if s.tag == "testsuite" else s[0]
+              total, fail = int(s.get("tests")), int(s.get("failures")) + int(s.get("errors"))
+              skip = int(s.get("skipped"))
+              print(f"passed={total - fail - skip}\nfailed={fail}\nskipped={skip}")
+          except Exception:
+              print("passed=?\nfailed=?\nskipped=?")
+          try:
+              print(f"coverage={json.load(open('coverage/coverage.json'))['totals']['percent_covered']:.1f}%")
+          except Exception:
+              print("coverage=n/a")
+          EOF
+          exit $status
+
+      - name: Verify frontend tests
+        id: frontend
+        continue-on-error: true
+        working-directory: frontend
+        run: |
+          set +e
+          npx vitest run --coverage --reporter=default --reporter=json --outputFile.json=../frontend-results.json
+          status=$?
+          {
+            jq -r '"passed=\(.numPassedTests)\nfailed=\(.numFailedTests)\nskipped=\(.numPendingTests + .numTodoTests)"' ../frontend-results.json \
+              || printf 'passed=?\nfailed=?\nskipped=?\n'
+            jq -r '"coverage=\(.total.lines.pct)%"' coverage/coverage-summary.json || echo "coverage=n/a"
+          } >> "$GITHUB_OUTPUT"
+          exit $status
+
+      - name: Commit and push generated tests
+        id: push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Pushes made with GITHUB_TOKEN never trigger new workflow runs,
+        # so this commit cannot start an endless agent loop.
+        run: |
+          git add -A -- ':(glob)backend/tests/**/*.py' ':(glob)frontend/src/**/*.test.ts' ':(glob)frontend/src/**/*.test.tsx'
+          if git diff --cached --quiet; then
+            echo "sha=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "test: add generated unit tests"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${HEAD_REF}"
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Post report comment
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXECUTION_FILE: ${{ steps.agent.outputs.execution_file }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # Step outputs go through env, never inline `${{ }}` in the script:
+          # `reverted` holds file names chosen by the agent (script injection).
+          AGENT: ${{ steps.agent.outcome }}
+          BE: ${{ steps.backend.outcome }}
+          BE_PASSED: ${{ steps.backend.outputs.passed }}
+          BE_FAILED: ${{ steps.backend.outputs.failed }}
+          BE_SKIPPED: ${{ steps.backend.outputs.skipped }}
+          BE_COV: ${{ steps.backend.outputs.coverage }}
+          FE: ${{ steps.frontend.outcome }}
+          FE_PASSED: ${{ steps.frontend.outputs.passed }}
+          FE_FAILED: ${{ steps.frontend.outputs.failed }}
+          FE_SKIPPED: ${{ steps.frontend.outputs.skipped }}
+          FE_COV: ${{ steps.frontend.outputs.coverage }}
+          COMMIT_SHA: ${{ steps.push.outputs.sha }}
+          REVERTED: ${{ steps.scope.outputs.reverted }}
+        run: |
+          icon() { [ "$1" = "success" ] && echo "✅" || echo "❌"; }
+          turns=$(jq -r '[.[] | select(.type == "result")] | last | .num_turns // "n/a"' "$EXECUTION_FILE" 2>/dev/null || echo "n/a")
+          marker='<!-- ai-tests-report -->'
+          {
+            echo "$marker"
+            echo "## 🧪 AI unit tests"
+            echo
+            echo "### Verified results"
+            echo "_Re-run by the workflow after the agent finished. These numbers do not come from the agent._"
+            echo
+            echo "| Suite | Status | Passed | Failed | Skipped | Line coverage |"
+            echo "|---|---|---|---|---|---|"
+            echo "| Backend (pytest) | $(icon "$BE") | ${BE_PASSED} | ${BE_FAILED} | ${BE_SKIPPED} | ${BE_COV} |"
+            echo "| Frontend (Vitest) | $(icon "$FE") | ${FE_PASSED} | ${FE_FAILED} | ${FE_SKIPPED} | ${FE_COV} |"
+            echo
+            echo "- Agent: \`${AGENT}\`, turns used: ${turns}/40"
+            if [ -n "$COMMIT_SHA" ]; then
+              echo "- Generated tests committed in ${COMMIT_SHA}"
+            else
+              echo "- No test changes committed"
+            fi
+            if [ -n "$REVERTED" ]; then
+              echo "- ⚠️ Reverted out-of-scope changes: \`${REVERTED}\`"
+            fi
+            echo
+            echo "### Agent report"
+            if [ -s agent-report.md ]; then
+              head -c 50000 agent-report.md
+            else
+              echo "_The agent did not produce a report (see the run log)._"
+            fi
+            echo
+            echo "---"
+            echo "[Workflow run](${RUN_URL}) · head \`${HEAD_SHA::7}\`"
+          } > comment.md
+          id=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
+            --jq ".[] | select(.body | startswith(\"${marker}\")) | .id" | head -n1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${id}" -F body=@comment.md > /dev/null
+          else
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file comment.md
+          fi
+
+      - name: Fail if verified tests fail
+        if: steps.backend.outcome == 'failure' || steps.frontend.outcome == 'failure'
+        run: |
+          echo "::error::Verified test run failed (backend: ${{ steps.backend.outcome }}, frontend: ${{ steps.frontend.outcome }})"
+          exit 1

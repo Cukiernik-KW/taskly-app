@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { expect, it, vi } from 'vitest'
 import { todoFixture } from '../../../test/todoFixture'
@@ -39,4 +39,66 @@ it('shows a deletion error and allows cancelling without deleting', async () => 
   expect(onClose).toHaveBeenCalledTimes(1)
   expect(mutateAsync).not.toHaveBeenCalled()
   expect(onDeleted).not.toHaveBeenCalled()
+})
+
+it('deletes the task and reports success', async () => {
+  const user = userEvent.setup()
+  const mutateAsync = vi.fn().mockResolvedValue(undefined)
+  vi.mocked(useDeleteTodoMutation).mockReturnValue({
+    isPending: false,
+    error: null,
+    mutateAsync,
+  } as unknown as ReturnType<typeof useDeleteTodoMutation>)
+  const onDeleted = vi.fn()
+  render(
+    <DeleteTodoDialog
+      todo={todoFixture}
+      busy={false}
+      onClose={vi.fn()}
+      onDeleted={onDeleted}
+    />,
+  )
+  await user.click(screen.getByRole('button', { name: 'Delete task' }))
+  expect(mutateAsync).toHaveBeenCalledWith(todoFixture.id)
+  await waitFor(() => expect(onDeleted).toHaveBeenCalledTimes(1))
+})
+
+it('disables the actions while a deletion is pending', () => {
+  vi.mocked(useDeleteTodoMutation).mockReturnValue({
+    isPending: true,
+    error: null,
+    mutateAsync: vi.fn(),
+  } as unknown as ReturnType<typeof useDeleteTodoMutation>)
+  render(
+    <DeleteTodoDialog
+      todo={todoFixture}
+      busy={false}
+      onClose={vi.fn()}
+      onDeleted={vi.fn()}
+    />,
+  )
+  expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Deleting…' })).toBeDisabled()
+})
+
+it('ignores delete clicks while the dialog is marked busy by its parent', async () => {
+  const user = userEvent.setup()
+  const mutateAsync = vi.fn()
+  vi.mocked(useDeleteTodoMutation).mockReturnValue({
+    isPending: false,
+    error: null,
+    mutateAsync,
+  } as unknown as ReturnType<typeof useDeleteTodoMutation>)
+  render(
+    <DeleteTodoDialog
+      todo={todoFixture}
+      busy
+      onClose={vi.fn()}
+      onDeleted={vi.fn()}
+    />,
+  )
+  const deleteButton = screen.getByRole('button', { name: 'Deleting…' })
+  expect(deleteButton).toBeDisabled()
+  await user.click(deleteButton)
+  expect(mutateAsync).not.toHaveBeenCalled()
 })

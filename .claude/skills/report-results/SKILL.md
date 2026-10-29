@@ -5,7 +5,7 @@ description: Write agent-report.md, a concise Markdown summary of a test-generat
 
 # Report results
 
-Write `agent-report.md` at the repository root. It's posted verbatim in a PR comment, so keep it short, factual and in Markdown. Don't add a top-level title; the comment provides one.
+Write `agent-report.md` at the repository root. It's posted verbatim in a PR comment, so keep it short, factual and in Markdown. Don't add a top-level title; the comment provides one. Follow the template's section names exactly.
 
 ## Template
 

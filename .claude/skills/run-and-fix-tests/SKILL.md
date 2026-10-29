@@ -5,7 +5,7 @@ description: Run the backend (pytest) and frontend (Vitest) unit tests you touch
 
 # Run and fix tests
 
-## Commands (run them from the repository root exactly as written)
+## Commands (run them from the repository root exactly as written; other forms such as `npx vitest` or `cd frontend && ...` may be blocked by the sandbox)
 
 ```sh
 python -m pytest backend/tests/<path>/test_x.py -q        # one backend file

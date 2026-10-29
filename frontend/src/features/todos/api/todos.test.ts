@@ -45,6 +45,14 @@ it('sends only writable task fields on a partial update', async () => {
   })
 })
 
+it('clears completed tasks', async () => {
+  vi.mocked(request).mockResolvedValue({ deleted: 2 })
+  await expect(todosApi.clearCompleted()).resolves.toEqual({ deleted: 2 })
+  expect(request).toHaveBeenCalledWith('/todos/completed', {
+    method: 'DELETE',
+  })
+})
+
 it('deletes a task by id', async () => {
   vi.mocked(request).mockResolvedValue(undefined)
   await expect(todosApi.remove(todoFixture.id)).resolves.toBeUndefined()

@@ -97,3 +97,14 @@ def test_delete_removes_the_record_and_commits():
     assert TodoRepository(session).delete(1) is True
     session.delete.assert_called_once_with(record)
     session.commit.assert_called_once_with()
+
+
+def test_delete_completed_executes_bulk_delete_and_returns_rowcount():
+    session = Mock(spec=Session)
+    session.execute.return_value = Mock(rowcount=2)
+    assert TodoRepository(session).delete_completed() == 2
+    statement = session.execute.call_args.args[0]
+    compiled = str(statement.compile(dialect=postgresql.dialect()))
+    assert compiled.startswith("DELETE FROM todos")
+    assert "todos.completed IS true" in compiled
+    session.commit.assert_called_once_with()

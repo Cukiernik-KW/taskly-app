@@ -108,7 +108,7 @@ function mockDefaultHooks({
   todos?: Todo[]
   busy?: boolean
   mutateAsync?: ReturnType<typeof vi.fn>
-  notify?: ReturnType<typeof vi.fn>
+  notify?: (message: string) => void
 } = {}) {
   vi.mocked(useTodosQuery).mockReturnValue({
     data: todos,
